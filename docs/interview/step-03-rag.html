@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>Step 03：Dify 知识库与 RAG 联调记录</title><style>body{font-family:Segoe UI,"Microsoft YaHei",sans-serif;max-width:960px;margin:32px auto;line-height:1.7;color:#222}h1,h2,h3{color:#17365d}pre{background:#f5f7fa;padding:14px;border-radius:8px;overflow:auto}code{background:#f1f3f5;padding:2px 4px;border-radius:4px}.warn{border-left:4px solid #d97706;background:#fff7ed;padding:12px}.ok{border-left:4px solid #15803d;background:#f0fdf4;padding:12px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ddd;padding:8px;text-align:left}</style></head>
+<body>
+<h1>Step 03：Dify 知识库与 RAG 联调记录</h1>
+<p><b>日期：</b>2026-09-28　<b>项目：</b>电商售后智能体　<b>状态：</b>知识库已导入，知识检索 2 已连接现有 LLM 上下文，并完成普通商品联合测试。</p>
+<h2>1. 已完成</h2>
+<div class="ok"><ul><li>在本地 Dify 创建并确认知识库：<code>电商售后规则库</code>。</li><li>导入文档：<code>after-sales-rules.md</code>。</li><li>从“开始”节点创建了已连通的“知识检索 2”分支。</li><li>查询变量绑定为：<code>用户输入 / user_question</code>。</li><li>知识库绑定为：<code>电商售后规则库</code>。</li><li>FastAPI 健康、订单和物流接口复核均返回 200。</li></ul></div>
+<h2>2. 当前工作流</h2>
+<pre>开始
+ ├─ 查询订单 ─┐
+ ├─ 查询物流 ─┼─&gt; LLM ─&gt; 输出
+ └─ 知识检索 2 ─（待接入现有 LLM）</pre>
+<div class="ok"><b>当前闭环：</b>知识检索 2 已连接到现有 LLM。LLM 的“上下文”字段绑定了 <code>知识检索 2 / result</code>，Prompt 中插入了特殊变量 <code>上下文</code>。</div>
+<h2>3. 遇到的问题</h2>
+<h3>知识检索节点的查询变量为空</h3>
+<p>初始节点没有上游连接，Dify 变量选择器只显示系统变量，看不到 <code>user_question</code>。根因是工作流变量的可达性，而不是 FastAPI、索引或 SSRF 问题。</p>
+<ol><li>确认开始节点存在 <code>order_no</code> 和 <code>user_question</code>；</li><li>确认知识检索节点没有上游边；</li><li>从开始节点入口重新创建“知识检索 2”；</li><li>新节点形成 <code>开始 → 知识检索 2</code> 后，变量列表出现用户输入变量；</li><li>绑定变量并选择知识库，配置成功。</li></ol>
+<p>画布目前保留了一个早期未连通节点和一个正确配置的“知识检索 2”。完成联调后应清理未使用节点；删除前需要确认保留节点。</p>
+<h2>4. 下一步</h2>
+<ol><li>把“知识检索 2”右侧连接到现有 LLM 左侧；</li><li>在 LLM Prompt 中通过变量插入器加入 <code>查询物流 / body</code> 和 <code>知识检索 2 / result</code>；</li><li>测试普通商品、特殊商品、待付款三类场景；</li><li>记录实际输出后再调 Top-K、分块和重排序；</li><li>随后增加售后资格判断、转人工和用户确认。</li></ol>
+<h2>5. 推荐 Prompt 结构</h2>
+<pre>你是电商售后助手。
+
+用户问题：{用户输入 / user_question}
+订单工具返回：{查询订单 / body}
+物流工具返回：{查询物流 / body}
+售后规则知识库返回：{知识检索 2 / result}
+
+只允许从对应来源读取事实；信息不足时明确说明并建议转人工；创建售后前必须获得用户明确确认。
+
+输出：
+## 订单信息
+## 物流信息
+## 规则依据
+## 售后判断
+## 下一步</pre>
+<h2>6. 面试八股</h2>
+<ul><li>RAG 链路：加载、清洗切分、索引/Embedding、召回、Top-K、重排、上下文拼接、生成。</li><li>工具负责实时订单事实，知识库负责售后规则，LLM 负责解释，不混淆信息来源。</li><li>chunk 太大噪声高，太小可能切断规则；overlap 用于降低边界损失。</li><li>Top-K 太大增加噪声和 Token；reranking 提升相关性但增加延迟。</li><li>通过来源约束、结构化 JSON、缺数据兜底、用户确认和日志复盘降低幻觉与误操作。</li></ul>
+<h2>7. 面试表述</h2>
+<p>我先用 FastAPI 实现订单和物流工具，再在 Dify 中导入售后规则知识库。联调时发现没有上游连接的知识检索节点无法看到用户问题变量，定位为工作流变量可达性问题，改为从开始节点建立检索分支后解决。目前正在把检索结果接入 LLM，并用三类订单做联合判断测试。</p>
+<h2>8. 状态更新：上下文变量与联合测试（2026-09-28）</h2>
+<p>知识库检索结果不能只作为普通 Prompt 文本插入。正确配置是：先在 LLM 的“上下文”字段选择 <code>知识检索 2 / result</code>，再在 Prompt 中输入 <code>/</code> 并选择特殊变量 <code>上下文</code>。</p>
+<pre>{
+  "order_no": "202609070001",
+  "user_question": "订单已签收三天，商品有质量问题，能否退款？"
+}</pre>
+<p>Dify Test Run 实际返回了订单信息、物流信息、规则依据和售后判断四部分，命中“已签收 7 天内的质量问题”规则，并建议人工审核，不直接承诺退款。</p><h2>9. 2026-09-30：字段来源修复与三类场景测试</h2>
+<div class="warn"><p><b>真实问题：</b>Dify 的“查询物流”节点曾只请求 <code>/orders/{order_no}</code>，因此返回了订单 JSON。由于该接口返回 200，问题不是 404，而是物流字段来源错误。</p><p><b>修复：</b>保留 Dify 变量 <code>用户输入 / order_no</code>，在末尾追加 <code>/logistics</code>。修复后实际读到 <code>status=SIGNED</code>、承运商“示例物流”和运单号 <code>SF1234567890</code>。</p></div>
+<h3>9.1 普通商品</h3>
+<pre>{
+  "order_no": "202609070001",
+  "user_question": "订单已签收三天，商品有质量问题，能否退款？"
+}</pre>
+<ul><li>订单状态：<code>COMPLETED</code>；物流状态：<code>SIGNED（已签收）</code>；承运商和运单号读取正确。</li><li>命中“已签收 7 天内的质量问题”，但因缺少凭证、当前日期和平台政策，未直接承诺退款。</li><li>未创建售后申请。</li></ul>
+<h3>9.2 特殊定制商品</h3>
+<pre>{
+  "order_no": "202609070002",
+  "user_question": "这个定制商品有质量问题，可以退款吗？"
+}</pre>
+<ul><li>识别商品类型 <code>SPECIAL</code>、物流状态 <code>SIGNED</code>。</li><li>命中特殊商品规则；要求质量凭证和平台政策确认，建议转人工。</li><li>未创建售后申请。</li></ul>
+<h3>9.3 待付款订单</h3>
+<pre>{
+  "order_no": "202609070003",
+  "user_question": "这个订单可以申请退款吗？"
+}</pre>
+<ul><li>识别订单状态 <code>PENDING_PAYMENT</code>、物流状态 <code>NOT_SHIPPED</code>、售后状态 <code>NONE</code>。</li><li>模型没有在规则不完整时直接承诺退款，要求先确认是否已支付，并说明创建申请不等于退款完成。</li><li>未创建售后申请。</li></ul>
+<h3>9.4 阶段结论</h3>
+<p>截至 2026-09-30，知识库上下文、字段来源约束和三类场景 Test Run 已完成。工作流仍为“未发布”。下一步是增加售后资格判断、转人工分支、用户明确确认后的售后申请调用，以及幂等和评估集测试。</p></body></html>
+

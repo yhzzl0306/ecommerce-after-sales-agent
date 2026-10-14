@@ -1,0 +1,61 @@
+# 阶段记录：Dify 工作流工具联调
+
+**日期：** 2026-09-27<br>
+**状态：** 已完成<br>
+**项目：** 电商售后智能体
+
+## 目标
+
+完成 Dify 对 FastAPI 订单和物流工具的调用，并把工具结果交给大模型生成结构化售后判断。
+
+## 工作流
+
+<pre>
+开始（order_no、user_question）
+  ↓
+查询订单 GET /orders/{order_no}
+  ↓
+查询物流 GET /orders/{order_no}/logistics
+  ↓
+LLM
+  ↓
+输出 answer
+</pre>
+
+## 关键问题
+
+<h3>1. 输出为空对象</h3>
+<p>原因是工作流没有最终输出节点。新增“输出”节点，并将 <code>LLM / text</code> 绑定到 <code>answer</code>。</p>
+
+<h3>2. Prompt 变量未绑定</h3>
+<p>手写的占位符只是普通文字。通过 Dify 变量选择器绑定：</p>
+<pre>用户输入 / user_question
+查询订单 / body
+查询物流 / body</pre>
+
+<h3>3. 查询物流 404</h3>
+<p>本地接口验证正常，最终修正为：</p>
+<pre>http://host.docker.internal:8001/orders/{order_no}/logistics</pre>
+
+<p>订单号使用开始节点的 <code>用户输入 / order_no</code> 变量。</p>
+
+## 测试结果
+
+订单号 <code>202609070001</code> 能成功返回：
+
+<ul>
+<li>订单状态：COMPLETED</li>
+<li>商品：示例蓝牙耳机</li>
+<li>支付金额：99.90 元</li>
+<li>物流状态：SIGNED</li>
+<li>承运商：示例物流</li>
+</ul>
+
+## 面试知识点
+
+<ul>
+<li>工作流节点成功不等于最终应用有输出；</li>
+<li>变量必须按节点和类型绑定；</li>
+<li>HTTP 404 应先核对实际请求路径和参数，再判断后端是否有问题；</li>
+<li>工具数据和规则数据应分别来自业务接口和知识库。</li>
+</ul>

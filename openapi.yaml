@@ -1,0 +1,152 @@
+openapi: 3.0.3
+info:
+  title: After-sales Tool Service
+  version: 0.1.0
+  description: Local development tool API for Dify after-sales agent.
+servers:
+  - url: http://host.docker.internal:8001
+paths:
+  /health:
+    get:
+      operationId: healthCheck
+      summary: 健康检查
+      responses:
+        '200':
+          description: 服务正常
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  service: { type: string, example: after-sales-tool-service }
+                  version: { type: string, example: 0.1.0 }
+  /orders/{order_no}:
+    get:
+      operationId: getOrder
+      summary: 查询订单摘要
+      parameters:
+        - name: order_no
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^\\d{12}$'
+          description: 12 位订单号
+      responses:
+        '200':
+          description: 订单摘要
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderSummary'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /orders/{order_no}/logistics:
+    get:
+      operationId: getLogistics
+      summary: 查询物流和签收信息
+      parameters:
+        - name: order_no
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^\\d{12}$'
+      responses:
+        '200':
+          description: 物流信息
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Logistics'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /after-sales/applications:
+    post:
+      operationId: createAfterSaleApplication
+      summary: 创建售后申请
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AfterSaleApplicationCreate'
+      responses:
+        '201':
+          description: 新建申请
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AfterSaleApplication'
+        '200':
+          description: 幂等重放，返回首次创建的申请
+          headers:
+            X-Idempotent-Replay:
+              schema: { type: string, example: 'true' }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AfterSaleApplication'
+        '409':
+          $ref: '#/components/responses/Conflict'
+components:
+  schemas:
+    OrderSummary:
+      type: object
+      required: [order_no, status, pay_amount, product_type, product_name, created_at, after_sale_status]
+      properties:
+        order_no: { type: string, example: '202609070001' }
+        status: { type: string, enum: [PENDING_PAYMENT, PAID, SHIPPED, COMPLETED, CANCELLED] }
+        pay_amount: { type: number, format: double, example: 99.9 }
+        product_type: { type: string, enum: [NORMAL, SPECIAL] }
+        product_name: { type: string, example: 示例蓝牙耳机 }
+        created_at: { type: string, format: date-time }
+        signed_at: { type: string, format: date-time, nullable: true }
+        after_sale_status: { type: string, enum: [NONE, PENDING_REVIEW, APPROVED, REJECTED, REFUNDING, COMPLETED, CLOSED] }
+    Logistics:
+      type: object
+      required: [order_no, status]
+      properties:
+        order_no: { type: string, example: '202609070001' }
+        status: { type: string, enum: [NOT_SHIPPED, IN_TRANSIT, SIGNED] }
+        carrier: { type: string, nullable: true }
+        tracking_no: { type: string, nullable: true }
+        signed_at: { type: string, format: date-time, nullable: true }
+    AfterSaleApplicationCreate:
+      type: object
+      required: [order_no, type, reason, idempotency_key]
+      properties:
+        order_no: { type: string, pattern: '^\\d{12}$', example: '202609070001' }
+        type: { type: string, enum: [QUALITY_REFUND, LOGISTICS_ISSUE, RETURN_REFUND] }
+        reason: { type: string, minLength: 2, maxLength: 500 }
+        idempotency_key: { type: string, minLength: 8, maxLength: 128 }
+    AfterSaleApplication:
+      type: object
+      required: [application_id, order_no, type, reason, status, idempotency_key, created_at]
+      properties:
+        application_id: { type: string, example: ASABC12345678 }
+        order_no: { type: string, example: '202609070001' }
+        type: { type: string, enum: [QUALITY_REFUND, LOGISTICS_ISSUE, RETURN_REFUND] }
+        reason: { type: string }
+        status: { type: string, enum: [PENDING_REVIEW, APPROVED, REJECTED, REFUNDING, COMPLETED, CLOSED] }
+        idempotency_key: { type: string }
+        created_at: { type: string, format: date-time }
+    ErrorResponse:
+      type: object
+      required: [code, message, request_id]
+      properties:
+        code: { type: string, example: NOT_FOUND }
+        message: { type: string }
+        request_id: { type: string }
+  responses:
+    NotFound:
+      description: 业务对象不存在
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Conflict:
+      description: 业务状态冲突或幂等冲突
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }

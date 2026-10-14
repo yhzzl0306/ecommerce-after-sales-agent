@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>Step 04：售后申请、幂等性与安全执行链路</title><style>body{font-family:Segoe UI,"Microsoft YaHei",sans-serif;max-width:980px;margin:32px auto;line-height:1.7;color:#222}h1,h2,h3{color:#17365d}pre{background:#f5f7fa;padding:14px;border-radius:8px;overflow:auto}code{background:#f1f3f5;padding:2px 4px;border-radius:4px}.warn{border-left:4px solid #d97706;background:#fff7ed;padding:12px}.ok{border-left:4px solid #15803d;background:#f0fdf4;padding:12px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background:#f5f7fa}</style></head>
+<body><h1>Step 04：售后申请、幂等性与安全执行链路</h1>
+<p><b>更新日期：</b>2026-10-07　<b>状态：</b>FastAPI、Dify 确认分支和最终申请结果输出均已完成；自动化测试 <code>9 passed</code>。</p>
+<h2>1. 完成情况</h2><pre>用户咨询 → 订单/物流/RAG → LLM 判断 → 用户明确确认 → POST 创建申请 → 申请结果 LLM → Output</pre>
+<ul><li>完成 <code>POST /after-sales/applications</code>；</li><li>完成订单状态、特殊商品和重复申请校验；</li><li>完成幂等键回放；</li><li>完成 Dify 条件分支、HTTP 动态变量映射和第二个 Output；</li><li>新增 <code>GET /orders/{order_no}/after-sales/active</code>。</li></ul>
+<h2>2. Dify 真实成功结果</h2><pre>售后申请结果
+
+- 申请号：ASDA7035BB9B4B
+- 订单号：202609070001
+- 售后类型：QUALITY_REFUND
+- 当前状态：PENDING_REVIEW（待人工审核）
+- 下一步：售后申请已提交，正在等待人工审核；PENDING_REVIEW 不等于退款已经完成。</pre>
+<div class="ok">申请号已经从 HTTP 节点进入最终用户输出；同时明确区分了“提交申请”和“退款完成”。</div>
+<h2>3. 三类边界测试</h2><table><tr><th>订单</th><th>场景</th><th>结果</th><th>创建</th></tr><tr><td>202609070001</td><td>普通已完成 + 确认</td><td>201，PENDING_REVIEW</td><td>是</td></tr><tr><td>202609070002</td><td>特殊定制 + 确认</td><td>409，转人工</td><td>否</td></tr><tr><td>202609070003</td><td>待付款 + 确认</td><td>409，不允许申请</td><td>否</td></tr></table>
+<h2>4. 面试八股：三层防线</h2><p>Prompt 层约束模型，工作流条件层约束调用路径，FastAPI 服务端层校验最终业务不变量。创建售后申请有副作用，不能只依赖 Prompt。</p>
+<h2>5. 幂等设计</h2><p>服务端维护 <code>idempotency_key → application</code> 映射。首次请求创建申请；相同幂等键重试时返回原申请并带 <code>X-Idempotent-Replay: true</code>；同一幂等键绑定其他订单或类型时返回 409。生产环境应使用数据库唯一索引或 Redis，并处理并发、过期和多实例一致性。</p>
+<h2>6. 处理中申请查询</h2><pre>GET /orders/{order_no}/after-sales/active</pre><pre>{
+  "order_no": "202609070001",
+  "has_active_application": true,
+  "application": {"application_id": "ASDA7035BB9B4B", "status": "PENDING_REVIEW"}
+}</pre><p>下一步把该接口接到 Dify 确认分支前面，已有申请直接返回，避免重复创建。</p>
+<h2>7. 自动化测试</h2><pre>cd C:\Users\ZZL\Desktop\shixixiangmu\after-sales-agent
+python -m pytest -q
+9 passed</pre>
+<h2>8. 下一步</h2><ol><li>在 Dify 增加处理中申请查询节点和 IF 分支；</li><li>验证已有申请不会再次创建；</li><li>补充 20-30 条评估集；</li><li>完善 Docker Compose、环境变量和真实 mall 适配边界。</li></ol></body></html>
+<h2>10. 2026-10-09：重复申请查询分支联调成功</h2>
+<p>HTTP 节点的 <code>body</code> 包含 <code>has_active_application: true</code>，但 Dify 条件分支不会自动展开 JSON 内部字段。新增代码节点“解析处理中申请结果”，将 body 解析后输出布尔变量，并将条件设置为：</p>
+<pre>解析处理中申请结果 / has_active_application == true</pre>
+<div class="ok"><p>订单 <code>202609070001</code> 测试进入 IF 分支，创建售后申请节点未执行。最终申请号为 <code>ASA199F40A7B8B</code>，状态为 <code>PENDING_REVIEW</code>。</p></div>
+<p><b>面试要点：</b>工作流节点之间需要明确数据契约；字符串 <code>"true"</code> 与布尔值 <code>true</code> 不能混用。</p>
+<h2>11. 2026-10-09：业务拦截输出与确认分支收敛成功</h2>
+<p>将业务资格判断放到创建售后申请之前，并把原始咨询 Output 移到“用户未确认”分支，避免确认场景拼接多段结果。</p>
+<table><tr><th>订单</th><th>判断</th><th>创建节点</th><th>最终提示</th></tr><tr><td>202609070002</td><td>SPECIAL</td><td>未执行</td><td>特殊定制商品需要转人工审核，不能自动创建售后申请。</td></tr><tr><td>202609070003</td><td>PENDING_PAYMENT</td><td>未执行</td><td>当前订单尚未完成，只有已完成订单才能提交售后申请。</td></tr></table>
+<p><b>面试要点：</b>预期业务拒绝应在副作用接口前确定性处理，HTTP 409 作为服务端最后一道兜底。</p>
